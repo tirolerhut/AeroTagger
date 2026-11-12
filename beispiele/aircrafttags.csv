@@ -1,0 +1,8 @@
+# Beispieldaten (fiktiv) – eigene Liste mit gleicher Kopfzeile anlegen oder beliebige Spalten verwenden
+Registration;Type;ICAO-Typ;Airline;Operator-ICAO;MSN;Baujahr;Bemerkung
+OE-ABC;Airbus A320-214;A320;Alpenflug;ALF;1234;2008;
+OE-ABD;Airbus A321-211;A321;Alpenflug;ALF;2345;2011;Sonderlackierung „Tirol“
+OE-XYZ;De Havilland Canada Dash 8-400;DH8D;Beispiel Air;BXA;4321;2015;
+D-AXYZ;Boeing 737-800;B738;Demo Charter;DMC;30123;2002;
+HB-JXX;Airbus A220-300;BCS3;Swiss Example;SXE;55011;2019;
+G-ABCD;Embraer E195-E2;E295;Muster Airways;MUA;19020001;2022;

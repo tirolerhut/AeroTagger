@@ -1,0 +1,19 @@
+# Zeilenenden einheitlich halten, egal ob unter Windows oder macOS/Linux eingecheckt
+* text=auto
+
+# Windows-Batchdateien brauchen CRLF, sonst laufen sie nicht zuverlaessig
+*.bat text eol=crlf
+
+# Shell- und Perl-Skripte brauchen LF, sonst starten sie unter macOS/Linux nicht
+*.command text eol=lf
+*.sh text eol=lf
+*.py text eol=lf
+*.pyw text eol=lf
+vendor/exiftool/exiftool text eol=lf
+vendor/exiftool/lib/** -text
+
+# Binaerdateien nie veraendern
+*.png binary
+*.ico binary
+*.jpg binary
+*.zip binary

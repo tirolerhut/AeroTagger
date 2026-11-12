@@ -1,0 +1,24 @@
+# Python-Umgebungen und Zwischenstaende
+.venv/
+.venv-build/
+__pycache__/
+*.py[cod]
+
+# PyInstaller (build_windows.bat)
+build/
+dist/
+*.spec
+
+# ExifTool fuer Windows, das lokal neben dem Projekt liegt (wird beim Build
+# geladen bzw. gefunden) - NICHT vendor/exiftool, das gehoert ins Repository
+/exiftool/
+/exiftool_files/
+/exiftool*.exe
+/*.zip
+
+# Betriebssystem und Editoren
+.DS_Store
+Thumbs.db
+desktop.ini
+.idea/
+.vscode/
