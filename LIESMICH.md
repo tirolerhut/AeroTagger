@@ -1,4 +1,4 @@
-# AeroTagger 0.2.12
+# AeroTagger 0.2.16
 
 Ordner durchsuchen, JPEG- und RAW-Dateien ansehen und IPTC-/XMP-/EXIF-Metadaten
 schreiben – mit Variablen, Kürzel-Ersetzung und CSV-Daten.
@@ -12,9 +12,10 @@ schreiben – mit Variablen, Kürzel-Ersetzung und CSV-Daten.
 
 Der erste Start richtet eine eigene Python-Umgebung im Ordner `.venv` ein (Internet nötig).
 
-Für eine Verknüpfung auf dem Windows-Desktop: Rechtsklick auf `start_windows.bat` →
-„Verknüpfung erstellen“, dann in den Eigenschaften der Verknüpfung „Anderes Symbol…“
-→ `aerotagger\resources\icon.ico` wählen.
+Beim ersten Start fragt `start_windows.bat`, ob eine **Verknüpfung auf dem
+Desktop** angelegt werden soll. Sie trägt das AeroTagger-Logo und startet das
+Programm direkt, ohne Konsolenfenster. Wer sie später doch möchte: die Datei
+`.venv\verknuepfung-gefragt` löschen und `start_windows.bat` erneut starten.
 
 **ExifTool** erledigt das eigentliche Lesen und Schreiben. Für macOS/Linux liegt es
 im Ordner `vendor/exiftool` bei. Unter Windows bietet AeroTagger beim ersten Start an,
@@ -41,6 +42,36 @@ beliebig verschieben oder weitergeben; die EXE braucht den Ordner `_internal`
 und ExifTool daneben. Eine nicht signierte EXE zeigt beim ersten Start die
 SmartScreen-Warnung – „Weitere Informationen → Trotzdem ausführen“.
 
+## Updates
+
+**Hilfe → Nach Updates suchen …** fragt bei GitHub nach dem neuesten Release.
+Gibt es eine neuere Version, zeigt AeroTagger, was neu ist, und bietet an:
+
+- **Jetzt aktualisieren** – lädt die neue Version und spielt sie ein:
+  - gestartet mit `start_windows.bat` bzw. `start_mac_linux.command`: der
+    Quellcode wird ersetzt (`.venv`, eigene Dateien und Einstellungen bleiben),
+    geänderte Abhängigkeiten werden nachinstalliert, danach Neustart;
+  - als Windows-EXE: die `AeroTagger-<Version>-windows.zip` aus dem Release
+    wird geladen; AeroTagger beendet sich, ein kleines Hilfsfenster ersetzt
+    die Dateien und startet das Programm neu.
+- **Auf GitHub ansehen** – öffnet die Release-Seite im Browser.
+
+Woher die Updates kommen, trägt `publish_github.bat` automatisch ein
+(`aerotagger/resources/github_repo.txt`). Abweichend davon lässt es sich unter
+**Einstellungen → Updates von GitHub** festlegen (Form `benutzer/AeroTagger`).
+
+Das AeroTagger-Repository ist öffentlich – dafür ist kein Token nötig.
+
+**Nur bei privatem Repository:** GitHub gibt die Releases dann nur mit Anmeldung heraus.
+Unter **Einstellungen → GitHub-Token** einen Token eintragen: auf github.com
+Settings → Developer settings → Personal access tokens → *Fine-grained tokens* →
+*Generate new token*, nur das AeroTagger-Repository auswählen und bei
+*Repository permissions* „Contents“ auf *Read-only* stellen. Der Token wird
+unverschlüsselt in `%USERPROFILE%\.aerotagger\einstellungen.json` gespeichert.
+
+Im eigenen Entwicklungsordner (mit `.git`) ist das Update abgeschaltet – dort
+aktualisiert man mit Git bzw. `publish_github.bat`.
+
 ## Auf GitHub veröffentlichen
 
 `publish_github.bat` doppelklicken – Einzelheiten in [GITHUB.md](GITHUB.md).
@@ -60,8 +91,9 @@ SmartScreen-Warnung – „Weitere Informationen → Trotzdem ausführen“.
    sie. Geschrieben wird XMP-Rating (Lightroom, Bridge, Photo Mechanic), bei
    JPEG zusätzlich EXIF Rating/RatingPercent für den Windows-Explorer; bei RAW
    je nach Einstellung in die XMP-Begleitdatei. Die Sterne stehen im
-   Filmstreifen links oben, in einer Zeile mit der getaggten Registrierung,
-   und unter der großen Vorschau.
+   Filmstreifen links oben, die getaggte Registrierung in derselben Zeile
+   rechtsbündig, und unter der großen Vorschau. RAW-Dateien tragen rechts
+   unter dem Bild, neben dem Dateinamen, das Kennzeichen „RAW“.
    **Bewertungsfilter:** Die Zeile über dem Filmstreifen filtert wie in
    Lightroom Classic: Vergleich wählen (≥ mindestens, = genau, ≤ höchstens),
    dann auf einen Stern klicken – nur passende Bilder bleiben sichtbar.
@@ -87,6 +119,41 @@ SmartScreen-Warnung – „Weitere Informationen → Trotzdem ausführen“.
 
 „Bild-Info“ zeigt die Metadaten des aktuellen Bildes, „Protokoll“ Hinweise und Fehler.
 Feldsätze lassen sich als Vorlage speichern.
+
+## Fokuspunkte (Canon)
+
+**Ansicht → Fokuspunkte anzeigen** oder Taste **F** blendet in der großen Vorschau
+die AF-Felder ein, die die Kamera in der Datei vermerkt hat – ähnlich dem
+Lightroom-Plugin FocusPoints:
+
+- **rot**: Feld, auf das scharfgestellt wurde
+- **weiß**: ausgewähltes Feld ohne Schärfe-Bestätigung
+- **blass**: übrige AF-Felder der Kamera (bei Spiegelreflexkameras)
+
+- **bernstein, gestrichelt**: das von der Kamera verfolgte Motiv (EOS R, siehe unten)
+
+Oben links stehen AF-Bereichsmodus, Zahl der Felder im Fokus und – wenn
+vorhanden – was die Kamera verfolgt hat, z. B. „Verfolgt: Fahrzeug · Körper“. Hochformat-Bilder
+werden richtig gedreht. Die Daten stammen aus den Canon-MakerNotes (CR2, CR3, CRW
+und Kamera-JPEGs); bei anderen Herstellern oder bearbeiteten Exporten ohne
+MakerNotes erscheint „Keine Fokuspunkte“. Die Einstellung bleibt nach dem
+Neustart erhalten.
+
+**EOS R-Serie:** Im Servo-AF mit Motivverfolgung markieren die R-Modelle oft
+kein Feld als „im Fokus“ – das AF-Feld erscheint dann weiß. Aussagekräftiger
+ist der Bereich, den die Kamera beim Auslösen verfolgt hat:
+
+| Modelle | angezeigt |
+|---|---|
+| R1, R5 Mark II, R6 Mark III, R8 Mark II | verfolgter Bereich mit Motivart (Person, Tier, Fahrzeug) und Teil (Kopf, Körper, Auge …) |
+| R3, R5, R6, R6 Mark II, R8, R50 | verfolgter Bereich |
+| R7, R10 | nur der Mittelpunkt (Fadenkreuz) |
+
+Dafür ist ExifTool 13.62 oder neuer nötig (beiliegend bzw. beim Windows-Build
+geladen; ein älteres, selbst ausgewähltes ExifTool zeigt nur die AF-Felder).
+Bilder mit Seitenverhältnis 1:1, 4:3 oder 16:9 aus dem Kameramenü werden
+berücksichtigt. Liegt ein AF-Feld nur bei gespiegelter Höhenachse auf dem
+verfolgten Motiv, korrigiert AeroTagger die Richtung automatisch.
 
 ## Metadaten Template
 

@@ -13,7 +13,7 @@ from pathlib import Path
 
 from PySide6.QtCore import (QDir, QEvent, QObject, QPointF, QRect, QRectF, QRunnable, QSize,
                             QStringListModel, Qt,
-                            QThread, QThreadPool, QTimer, QUrl, Signal)
+                            QProcess, QThread, QThreadPool, QTimer, QUrl, Signal)
 from PySide6.QtGui import (QAction, QColor, QDesktopServices, QFont, QIcon, QImage,
                            QImageReader, QKeySequence, QPainter, QPainterPath,
                            QPalette, QPen, QPixmap, QPolygonF, QTransform)
@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
     QToolButton, QTreeView, QVBoxLayout, QWidget, QInputDialog)
 
 from . import core
+from . import update as upd
 from .core import FIELDS, FIELD_BY_KEY
 
 CONFIG_FILE = core.CONFIG_DIR / "einstellungen.json"
@@ -222,6 +223,72 @@ class AcFetchTask(QRunnable):
             pass
 
 
+class UpdateSignals(QObject):
+    checked = Signal(object, str)        # Release oder None, Fehlertext
+    progress = Signal(int, int)
+    downloaded = Signal(str, str)        # Datei, Fehlertext
+
+
+class UpdateCheckTask(QRunnable):
+    def __init__(self, sig, repo, token):
+        super().__init__()
+        self.sig, self.repo, self.token = sig, repo, token
+
+    def run(self):
+        try:
+            rel, err = upd.latest_release(self.repo, self.token), ""
+        except upd.UpdateError as e:
+            rel, err = None, str(e)
+        try:
+            self.sig.checked.emit(rel, err)
+        except RuntimeError:
+            pass
+
+
+class UpdateDownloadTask(QRunnable):
+    def __init__(self, sig, url, dest, token):
+        super().__init__()
+        self.sig, self.url, self.dest, self.token = sig, url, dest, token
+        self.cancel = False
+
+    def run(self):
+        err = ""
+        try:
+            upd.download(self.url, Path(self.dest), self.token,
+                         progress=lambda a, b: self.sig.progress.emit(a, b),
+                         cancelled=lambda: self.cancel)
+        except upd.UpdateError as e:
+            err = str(e)
+        try:
+            self.sig.downloaded.emit(self.dest, err)
+        except RuntimeError:
+            pass
+
+
+class AfSignals(QObject):
+    done = Signal(str, object)        # Pfad, Fokuspunkte oder None
+
+
+class AfTask(QRunnable):
+    """Liest die Fokuspunkte eines Bildes im Hintergrund."""
+
+    def __init__(self, win, path):
+        super().__init__()
+        self.win, self.path = win, path
+
+    def run(self):
+        data = None
+        if self.path == self.win.preview.path:
+            try:
+                data = self.win.et_af.af_info(self.path)
+            except Exception:  # noqa
+                data = None
+        try:
+            self.win.af_signals.done.emit(self.path, data)
+        except RuntimeError:
+            pass
+
+
 class PreviewSignals(QObject):
     loaded = Signal(str, QImage)
     full = Signal(str, QImage)        # volle Auflösung für die Lupe
@@ -280,6 +347,8 @@ class PreviewView(QWidget):
         self.loupe_pos = None
         self.loupe_zoom = 1.0
         self.tag = None              # Kennzeichnung „mit AeroTagger getaggt“
+        self.af_on = False           # Fokuspunkte einblenden
+        self.af_path, self.af, self.af_loading = None, None, False
         self.setMinimumHeight(160)
         self.setFocusPolicy(Qt.ClickFocus)
         self.setToolTip("Rechte Maustaste gedrückt halten: Lupe (Mausrad ändert die Vergrößerung)\n"
@@ -291,6 +360,75 @@ class PreviewView(QWidget):
             self.update()
 
     TAG_LINE = 26
+
+    def set_af(self, on, path=None, data=None, loading=False):
+        """Fokuspunkte für path (data aus core.af_points, None = keine Daten)."""
+        self.af_on, self.af_path, self.af, self.af_loading = on, path, data, loading
+        self.update()
+
+    def _draw_af(self, p, r):
+        """Fokusfelder über das Bild r zeichnen; ohne Daten ein kurzer Hinweis."""
+        if not self.af_on or self.af_path != self.path:
+            return
+        p.save()
+        p.setRenderHint(QPainter.Antialiasing, True)
+        p.setClipRect(r)
+        if self.af:
+            pts, track = core.af_layout(self.af, r.width() / max(1, r.height()))
+            colors = {core.AF_INACTIVE: (QColor(255, 255, 255, 70), 1.0),
+                      core.AF_SELECTED: (QColor(255, 255, 255, 230), 1.6),
+                      core.AF_FOCUS: (QColor("#ff3b30"), 2.4)}
+            focus = 0
+            for cx, cy, w, h, state in sorted(pts, key=lambda t: t[4]):
+                col, width = colors[state]
+                focus += state == core.AF_FOCUS
+                bw, bh = max(6.0, w * r.width()), max(6.0, h * r.height())
+                box = QRectF(r.x() + cx * r.width() - bw / 2, r.y() + cy * r.height() - bh / 2, bw, bh)
+                if state == core.AF_FOCUS:        # dunkler Rand für Kontrast auf hellem Himmel
+                    p.setPen(QPen(QColor(0, 0, 0, 120), width + 2))
+                    p.drawRect(box)
+                p.setPen(QPen(col, width))
+                p.drawRect(box)
+            amber = QColor("#F5A524")
+            if track and track.get("box"):        # verfolgtes Motiv (EOS R)
+                cx, cy, w, h = track["box"]
+                bw, bh = max(8.0, w * r.width()), max(8.0, h * r.height())
+                box = QRectF(r.x() + cx * r.width() - bw / 2, r.y() + cy * r.height() - bh / 2, bw, bh)
+                p.setPen(QPen(QColor(0, 0, 0, 120), 4))
+                p.drawRect(box)
+                pen = QPen(amber, 2)
+                pen.setStyle(Qt.DashLine)
+                p.setPen(pen)
+                p.drawRect(box)
+            elif track and track.get("pt"):       # nur Mittelpunkt (R7, R10)
+                x = r.x() + track["pt"][0] * r.width()
+                y = r.y() + track["pt"][1] * r.height()
+                for col, wd in ((QColor(0, 0, 0, 120), 4), (amber, 2)):
+                    p.setPen(QPen(col, wd))
+                    p.drawEllipse(QPointF(x, y), 11, 11)
+                    p.drawLine(QPointF(x - 18, y), QPointF(x - 6, y))
+                    p.drawLine(QPointF(x + 6, y), QPointF(x + 18, y))
+                    p.drawLine(QPointF(x, y - 18), QPointF(x, y - 6))
+                    p.drawLine(QPointF(x, y + 6), QPointF(x, y + 18))
+            label = "AF" + (f": {self.af['mode']}" if self.af["mode"] else "")
+            if focus:
+                label += f"  ·  {focus} im Fokus"
+            if track:
+                label += "  ·  " + track["label"]
+        else:
+            label = "Fokuspunkte werden gelesen …" if self.af_loading else \
+                "Keine Fokuspunkte (nur Canon-Kameras)"
+        f = p.font()
+        f.setPointSizeF(f.pointSizeF() * 0.9)
+        p.setFont(f)
+        tw = p.fontMetrics().horizontalAdvance(label) + 14
+        lab = QRectF(r.x() + 8, r.y() + 8, tw, p.fontMetrics().height() + 6)
+        p.setPen(Qt.NoPen)
+        p.setBrush(QColor(0, 0, 0, 150))
+        p.drawRoundedRect(lab, 4, 4)
+        p.setPen(QColor("#e4e6e9"))
+        p.drawText(lab, Qt.AlignCenter, label)
+        p.restore()
 
     def show_image(self, path, pm, final, title="", counter="", info="", tag=None, rating=0):
         self.rating = rating
@@ -334,6 +472,7 @@ class PreviewView(QWidget):
             y = area.y() + (area.height() - size.height()) // 2
             p.drawPixmap(x, y, spm)
             self._img_rect = QRect(x, y, size.width(), size.height())
+            self._draw_af(p, self._img_rect)
         elif not self.pm:
             p.setPen(QColor("#6d737b"))
             p.drawText(area, Qt.AlignCenter, "Vorschau wird geladen …")
@@ -744,46 +883,46 @@ class ThumbDelegate(QStyledItemDelegate):
         else:
             p.setBrush(QColor("#3a3d41"))
             p.drawRect(area.adjusted(10, 20, -10, -20))
-        p.setPen(QColor("#ffffff") if selected else QColor("#c9cdd2"))
         trect = QRect(r.left() + 4, r.bottom() - 22, r.width() - 8, 20)
-        name = opt.fontMetrics.elidedText(idx.data(Qt.DisplayRole), Qt.ElideMiddle, trect.width())
-        p.drawText(trect, Qt.AlignCenter, name)
-        y, h = r.top() + 6, 18
-        right = r.right() - 6
-        if core.is_raw(path):              # RAW-Kennzeichen rechts oben
+        if core.is_raw(path):              # RAW-Kennzeichen rechts unter dem Bild
             f = QFont(opt.font)
             f.setPointSizeF(f.pointSizeF() * 0.8)
             f.setBold(True)
             p.setFont(f)
             bw = p.fontMetrics().horizontalAdvance("RAW") + 10
-            br = QRect(right - bw, y, bw, h)
+            br = QRect(r.right() - 6 - bw, trect.center().y() - 8, bw, 17)
             p.setPen(Qt.NoPen)
             p.setBrush(QColor(0, 0, 0, 170))
             p.drawRoundedRect(br, 3, 3)
             p.setPen(QColor("#ffcc66"))
             p.drawText(br, Qt.AlignCenter, "RAW")
-            right = br.left() - 4
-        x = r.left() + 6                   # links oben: Sterne, dann Registrierung
+            p.setFont(opt.font)
+            trect.setRight(br.left() - 4)
+        p.setPen(QColor("#ffffff") if selected else QColor("#c9cdd2"))
+        name = opt.fontMetrics.elidedText(idx.data(Qt.DisplayRole), Qt.ElideMiddle, trect.width())
+        p.drawText(trect, Qt.AlignCenter, name)
+        y, h = r.top() + 6, 18
+        left, right = r.left() + 6, r.right() - 6
         rating = self.win.ratings.get(path, 0)
-        if rating > 0:
+        if rating > 0:                     # links oben: Sterne
             sz = 10 if r.width() < 150 else 11
             w = 5 * sz + 4 * 2 + 10
-            if x + w <= right:
+            if left + w <= right:
                 p.setPen(Qt.NoPen)
                 p.setBrush(QColor(0, 0, 0, 170))
-                p.drawRoundedRect(QRect(x, y, w, h), 4, 4)
-                draw_stars(p, x + 5, y + (h - sz) / 2, sz, rating)
-                x += w + 4
+                p.drawRoundedRect(QRect(left, y, w, h), 4, 4)
+                draw_stars(p, left + 5, y + (h - sz) / 2, sz, rating)
+                left += w + 4
         info = self.win.tagged.get(path)
-        if info is not None and right - x >= 22:
+        if info is not None and right - left >= 22:   # rechts oben: Registrierung
             f = QFont(opt.font)
             f.setPointSizeF(f.pointSizeF() * 0.85)
             f.setBold(True)
             p.setFont(f)
             fm = p.fontMetrics()
-            label = fm.elidedText(info.get("reg") or "✓", Qt.ElideRight, right - x - 12)
+            label = fm.elidedText(info.get("reg") or "✓", Qt.ElideRight, right - left - 12)
             w = fm.horizontalAdvance(label) + 12
-            tb = QRect(x, y, w, h)
+            tb = QRect(right - w, y, w, h)
             p.setPen(Qt.NoPen)
             p.setBrush(QColor("#F5A524"))
             p.drawRoundedRect(tb, 4, 4)
@@ -1233,6 +1372,20 @@ class SettingsDialog(QDialog):
         row.addWidget(b)
         form.addRow("ExifTool-Programm:", row)
         form.addRow("", QLabel(et_info))
+        self.repo = QLineEdit(cfg.get("update_repo", ""))
+        self.repo.setPlaceholderText(upd.default_repo() or "benutzer/AeroTagger")
+        form.addRow("Updates von GitHub:", self.repo)
+        self.token = QLineEdit(cfg.get("github_token", ""))
+        self.token.setEchoMode(QLineEdit.Password)
+        self.token.setPlaceholderText("nur für private Repositories")
+        form.addRow("GitHub-Token:", self.token)
+        hint = QLabel("Für ein privates Repository einen „Fine-grained token“ mit Leserecht "
+                      "auf „Contents“ anlegen: GitHub → Settings → Developer settings → "
+                      "Personal access tokens. Der Token wird unverschlüsselt in den "
+                      "Einstellungen gespeichert.")
+        hint.setWordWrap(True)
+        hint.setStyleSheet("color:#9aa0a6")
+        form.addRow("", hint)
         bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         bb.button(QDialogButtonBox.Cancel).setText("Abbrechen")
         bb.accepted.connect(self.accept)
@@ -1279,6 +1432,11 @@ class MainWindow(QMainWindow):
         self.prev_signals.loaded.connect(self.on_preview)
         self.prev_signals.full.connect(self.on_full)
         self.full_pending = None
+        self.et_af = None                 # eigener ExifTool-Prozess für Fokuspunkte (bei Bedarf)
+        self.af_cache = OrderedDict()     # pfad -> Fokuspunkte oder None
+        self.af_pending = set()
+        self.af_signals = AfSignals()
+        self.af_signals.done.connect(self.on_af)
         self.items = {}          # pfad -> QListWidgetItem
         self.pixmaps = {}        # pfad -> QPixmap
         self.meta = {}           # pfad -> Metadaten
@@ -1422,7 +1580,18 @@ class MainWindow(QMainWindow):
         a.triggered.connect(self.export_template)
         self._update_tpl_menu()
 
+        m = mb.addMenu("&Ansicht")
+        self.act_af = m.addAction("Fokuspunkte anzeigen")
+        self.act_af.setCheckable(True)
+        self.act_af.setShortcut(QKeySequence("F"))
+        self.act_af.setToolTip("Zeigt in der Vorschau die AF-Felder von Canon-Kameras (Taste F)")
+        self.act_af.setChecked(bool(self.cfg.get("show_af", False)))
+        self.act_af.toggled.connect(lambda _on: self._update_af())
+
         m = mb.addMenu("&Hilfe")
+        a = m.addAction("Nach Updates suchen …")
+        a.triggered.connect(self.check_updates)
+        m.addSeparator()
         a = m.addAction(f"Über {core.APP_NAME}")
         a.triggered.connect(self.show_about)
 
@@ -1506,6 +1675,122 @@ class MainWindow(QMainWindow):
                 + (" und die Dateien umbenennen?" if rename else "?")) != QMessageBox.Yes:
             return
         self.run_write(jobs, kw_mode=tpl.get("kw_mode") or "replace")
+
+    # ---- Update über GitHub --------------------------------------------------
+    def _update_repo(self):
+        return self.cfg.get("update_repo") or upd.default_repo()
+
+    def check_updates(self):
+        repo = self._update_repo()
+        if not repo:
+            QMessageBox.information(
+                self, "Updates", "Es ist noch kein GitHub-Repository eingestellt.\n\n"
+                "Trage es unter Einstellungen → „Updates von GitHub“ ein, "
+                "z. B. benutzer/AeroTagger.")
+            return
+        self.upd_sig = UpdateSignals()
+        self.upd_sig.checked.connect(self._on_update_checked)
+        self.statusBar().showMessage(f"Suche Updates in {repo} …")
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        self.net_pool.start(UpdateCheckTask(self.upd_sig, repo, self.cfg.get("github_token", "")))
+
+    def _on_update_checked(self, rel, err):
+        QApplication.restoreOverrideCursor()
+        self.statusBar().clearMessage()
+        if rel is None:
+            QMessageBox.warning(self, "Updates", err)
+            return
+        if not upd.is_newer(rel["version"]):
+            QMessageBox.information(
+                self, "Updates", f"{core.APP_NAME} {core.APP_VERSION} ist aktuell.\n\n"
+                f"Neueste Version auf GitHub: {rel['version']}")
+            return
+        kind, *rest = upd.plan(rel)
+        box = QMessageBox(self)
+        box.setWindowTitle("Update verfügbar")
+        box.setIcon(QMessageBox.Information)
+        box.setText(f"<b>{html.escape(rel['name'])}</b> ist verfügbar.<br>"
+                    f"Installiert ist {core.APP_VERSION}.")
+        info = rel["notes"] or "(keine Beschreibung)"
+        if not kind:
+            info += "\n\n" + rest[0]
+        box.setInformativeText(info[:1500])
+        b_now = box.addButton("Jetzt aktualisieren", QMessageBox.AcceptRole) if kind else None
+        b_web = box.addButton("Auf GitHub ansehen", QMessageBox.ActionRole)
+        box.addButton("Später", QMessageBox.RejectRole)
+        box.exec()
+        if box.clickedButton() == b_web:
+            QDesktopServices.openUrl(QUrl(rel["url"]))
+        elif b_now is not None and box.clickedButton() == b_now:
+            self._download_update(rel, kind, rest[0], rest[1])
+
+    def _download_update(self, rel, kind, url, size):
+        import tempfile
+        dest = os.path.join(tempfile.gettempdir(), f"aerotagger-{rel['version']}-{kind}.zip")
+        dlg = QProgressDialog(f"Lade {core.APP_NAME} {rel['version']} …", "Abbrechen", 0, 0, self)
+        dlg.setWindowTitle("Update")
+        dlg.setWindowModality(Qt.WindowModal)
+        dlg.setMinimumDuration(0)
+        dlg.setAutoClose(False)
+        dlg.setAutoReset(False)
+        task = UpdateDownloadTask(self.upd_sig, url, dest, self.cfg.get("github_token", ""))
+        task.setAutoDelete(False)
+
+        def prog(done, total):
+            total = total or size
+            if total:
+                dlg.setMaximum(100)
+                dlg.setValue(min(99, done * 100 // total))
+            dlg.setLabelText(f"Lade {core.APP_NAME} {rel['version']} … {done / 1e6:.1f} MB")
+
+        def finished(path, err):
+            for s_, f_ in ((self.upd_sig.progress, prog), (self.upd_sig.downloaded, finished)):
+                s_.disconnect(f_)
+            dlg.close()
+            if err:
+                if not task.cancel:
+                    QMessageBox.warning(self, "Update", err)
+                return
+            self._install_update(rel, kind, Path(path))
+
+        self.upd_sig.progress.connect(prog)
+        self.upd_sig.downloaded.connect(finished)
+        dlg.canceled.connect(lambda: setattr(task, "cancel", True))
+        self._upd_task = task
+        self.net_pool.start(task)
+
+    def _install_update(self, rel, kind, zip_path):
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            if kind == "frozen":
+                bat = upd.install_frozen(zip_path)
+            else:
+                if upd.install_source(zip_path):
+                    self.statusBar().showMessage("Installiere geänderte Abhängigkeiten …")
+                    QApplication.processEvents()
+                    upd.update_requirements()
+        except upd.UpdateError as e:
+            QApplication.restoreOverrideCursor()
+            QMessageBox.warning(self, "Update", str(e))
+            return
+        finally:
+            try:
+                zip_path.unlink()
+            except OSError:
+                pass
+        QApplication.restoreOverrideCursor()
+        if kind == "frozen":
+            QMessageBox.information(self, "Update", f"{core.APP_NAME} wird jetzt beendet, "
+                                    f"auf {rel['version']} aktualisiert und neu gestartet.")
+            upd.run_helper(bat)
+            self.close()
+            return
+        r = QMessageBox.question(self, "Update", f"{core.APP_NAME} {rel['version']} ist "
+                                 "installiert. Jetzt neu starten?")
+        if r == QMessageBox.Yes:
+            cmd = upd.restart_command()
+            if self.close():
+                QProcess.startDetached(cmd[0], cmd[1:], str(core.APP_DIR))
 
     def show_about(self):
         box = QMessageBox(self)
@@ -2741,7 +3026,7 @@ class MainWindow(QMainWindow):
                  view="strip" if self.strip_mode else "grid",
                  show_meta=self.chk_meta.isChecked(), ac=self.ac_state(),
                  rating_filter={"n": self.star_filter.value, "op": self.cmb_rop.currentData()},
-                 icon=self.sld.value(), recursive=self.chk_recursive.isChecked(),
+                 icon=self.sld.value(), show_af=self.act_af.isChecked(), recursive=self.chk_recursive.isChecked(),
                  folder=self.folder, pad=self.pad_state(),
                  codes_csv=self.codes.path or "", data_csv=self.data.path or "",
                  data_key=self.data.key_column)
@@ -2753,6 +3038,8 @@ class MainWindow(QMainWindow):
         self.et_thumb.close()
         self.et_preview.close()
         self.et_scan.close()
+        if self.et_af is not None:
+            self.et_af.close()
         super().closeEvent(ev)
 
     def pad_state(self):
@@ -3042,6 +3329,34 @@ class MainWindow(QMainWindow):
                                     tag=core.tag_info(m), rating=self.ratings.get(p, core.rating_of(m)))
             if not final_failed:
                 self.request_preview(p, visible)
+        self._update_af()
+
+    # ---- Fokuspunkte ------------------------------------------------------------
+    def _update_af(self):
+        on = self.act_af.isChecked()
+        p = self.preview.path
+        if not on or not p:
+            self.preview.set_af(on)
+            return
+        if p in self.af_cache:
+            self.preview.set_af(True, p, self.af_cache[p])
+            return
+        self.preview.set_af(True, p, None, loading=True)
+        if p not in self.af_pending:
+            if self.et_af is None:
+                self.et_af = core.ExifTool(self.et.cmd)
+            self.af_pending.add(p)
+            self.net_pool.start(AfTask(self, p))
+
+    def on_af(self, path, data):
+        self.af_pending.discard(path)
+        if path != self.preview.path:
+            return                      # weitergeblättert – beim nächsten Mal neu lesen
+        self.af_cache[path] = data
+        while len(self.af_cache) > 300:
+            self.af_cache.popitem(last=False)
+        if self.act_af.isChecked():
+            self.preview.set_af(True, path, data)
 
     def apply_filter(self):
         text = self.ed_filter.text().strip().lower()
@@ -3562,6 +3877,8 @@ class MainWindow(QMainWindow):
             return
         self.cfg["raw_mode"] = d.raw.currentData()
         self.cfg["backup"] = d.backup.isChecked()
+        self.cfg["update_repo"] = d.repo.text().strip()
+        self.cfg["github_token"] = d.token.text().strip()
         new = d.et.text().strip()
         if new != self.cfg.get("exiftool", ""):
             QApplication.setOverrideCursor(Qt.WaitCursor)

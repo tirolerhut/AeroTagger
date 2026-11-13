@@ -21,7 +21,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 APP_NAME = "AeroTagger"
-APP_VERSION = "0.2.12"
+APP_VERSION = "0.2.16"
 if getattr(sys, "frozen", False):
     # als EXE (PyInstaller): Programmordner = Ordner der AeroTagger.exe,
     # dort liegt auch ExifTool (exiftool.exe + exiftool_files)
@@ -613,6 +613,15 @@ class ExifTool:
             out[p] = rec
         return out
 
+    def af_info(self, path):
+        """Fokuspunkte einer Datei (siehe af_points) oder None."""
+        out, _err = self.execute(["-j", *[f"-{t}" for t in AF_TAGS], path])
+        try:
+            data = json.loads(out.decode("utf-8", "replace")) if out.strip() else []
+        except json.JSONDecodeError:
+            return None
+        return af_points(data[0]) if data else None
+
     # ---- Vorschaubilder ---------------------------------------------------
     def preview(self, path, large=False):
         """Eingebettetes JPEG einer RAW-Datei, plus EXIF-Orientierung (1–8).
@@ -828,6 +837,208 @@ def parse_extras(text: str):
             continue
         out.append((tag, val.strip()))
     return out, errors
+
+
+# --------------------------------------------------------------------------
+# Fokuspunkte (Canon: AFInfo/AFInfo2 und Motivverfolgung der EOS R)
+# --------------------------------------------------------------------------
+# '#' = Zahlenwert statt Klartext
+AF_TAGS = ["Make", "Model", "CameraType#", "AFAreaMode", "NumAFPoints#",
+           "AFImageWidth#", "AFImageHeight#", "CanonImageWidth#", "CanonImageHeight#",
+           "ExifImageWidth#", "ExifImageHeight#",
+           "AFAreaWidths#", "AFAreaHeights#", "AFAreaWidth#", "AFAreaHeight#",
+           "AFAreaXPositions#", "AFAreaYPositions#",
+           "AFPointsInFocus#", "AFPointsSelected#", "Orientation#",
+           # Seitenverhältnis-Beschnitt (1:1, 4:3, 16:9 im Kameramenü)
+           "CroppedImageWidth#", "CroppedImageHeight#", "CroppedImageLeft#", "CroppedImageTop#",
+           # Motivverfolgung: R1, R5 Mark II, R6 Mark III, R8 Mark II …
+           "AFTrackingArea#", "AFDetectedSubject", "AFTrackingTarget", "AFEyeUsed",
+           # … und als Verlauf: R3, R5, R6, R6 Mark II, R8, R50, R7, R10
+           "AFTrackingHistory"]
+
+AF_INACTIVE, AF_SELECTED, AF_FOCUS = 0, 1, 2
+
+_AF_SUBJECT = {"person": "Person", "animal (cat)": "Tier (Katze)",
+               "animal (dog or bird)": "Tier (Hund/Vogel)", "animal (horse)": "Tier (Pferd)",
+               "vehicle": "Fahrzeug"}
+_AF_TARGET = {"head": "Kopf", "body": "Körper", "face": "Gesicht", "eye": "Auge"}
+_AF_EYE = {"left": "linkes Auge", "right": "rechtes Auge"}
+
+
+def _nums(v) -> list:
+    if v is None or v == "":
+        return []
+    if isinstance(v, (list, tuple)):
+        v = " ".join(str(x) for x in v)
+    out = []
+    for x in str(v).replace(",", " ").split():
+        try:
+            out.append(int(float(x)))
+        except ValueError:
+            pass
+    return out
+
+
+def _bits(v) -> set:
+    """Bitmaske aus 16-Bit-Wörtern („8192 0 0“) → Menge der Punktnummern."""
+    found = set()
+    for k, word in enumerate(_nums(v)):
+        word &= 0xFFFF
+        for j in range(16):
+            if word >> j & 1:
+                found.add(k * 16 + j)
+    return found
+
+
+def _orient_box(cx, cy, w, h, orient):
+    """Rechnet ein Feld (normiert 0–1, Sensorlage) in die gedrehte Bildlage um –
+    genauso wie die Vorschau gedreht wird (erst spiegeln, dann im Uhrzeigersinn drehen)."""
+    rot, mirror = {3: (180, False), 6: (90, False), 8: (270, False), 2: (0, True),
+                   4: (180, True), 5: (90, True), 7: (270, True)}.get(orient, (0, False))
+    if mirror:
+        cx = 1 - cx
+    if rot == 90:
+        cx, cy, w, h = 1 - cy, cx, h, w
+    elif rot == 180:
+        cx, cy = 1 - cx, 1 - cy
+    elif rot == 270:
+        cx, cy, w, h = cy, 1 - cx, h, w
+    return cx, cy, w, h
+
+
+def _af_tracking(meta, iw, ih):
+    """Motivverfolgung → {"box": (cx, cy, w, h) | None, "pt": (cx, cy) | None,
+    "label": text} normiert auf das AF-Bild, oder None."""
+    sub = _AF_SUBJECT.get(str(meta.get("AFDetectedSubject", "")).strip().lower(), "")
+    tgt = str(meta.get("AFTrackingTarget", "")).strip().lower()
+    eye = _AF_EYE.get(str(meta.get("AFEyeUsed", "")).strip().lower(), "")
+    box = pt = None
+    area = _nums(meta.get("AFTrackingArea"))          # Mitte X, Mitte Y, Breite, Höhe; 0,0 = links oben
+    if len(area) == 4 and area[2] > 0 and area[3] > 0:
+        box = (area[0] / iw, area[1] / ih, area[2] / iw, area[3] / ih)
+    else:
+        hist = meta.get("AFTrackingHistory")
+        if isinstance(hist, str):
+            hist = [hist]
+        for rec in hist or []:                         # neuester Eintrag zuerst
+            rec = str(rec)
+            m = re.search(r"(\d+)x(\d+) at \((\d+) (\d+)\)", rec)
+            if m:
+                w, h, x, y = map(int, m.groups())
+                if w > 0 and h > 0:
+                    box = (x / iw, y / ih, w / iw, h / ih)
+                    t = re.search(r"ms: ([A-Za-z]+) \d+x\d+", rec)
+                    if t and not tgt:
+                        tgt = t.group(1).lower()
+                    break
+            m = re.search(r"raw centre ([+-]?\d+) ([+-]?\d+)", rec)
+            if m:                                      # R7/R10: nur der Mittelpunkt
+                x, y = map(int, m.groups())
+                pt = (0.5 + x / iw, 0.5 + y / ih)
+                break
+    if box is None and pt is None:
+        return None
+    if box and not (-0.05 <= box[0] <= 1.05 and -0.05 <= box[1] <= 1.05):
+        return None
+    if pt and not (0 <= pt[0] <= 1 and 0 <= pt[1] <= 1):
+        return None
+    parts = [x for x in (sub, _AF_TARGET.get(tgt, ""), eye) if x]
+    return {"box": box, "pt": pt, "label": "Verfolgt" + (": " + " · ".join(parts) if parts else "")}
+
+
+def af_points(meta: dict):
+    """Wertet die Canon-Fokusdaten eines ExifTool-Datensatzes (AF_TAGS, ohne -G) aus.
+    Rückgabe None (keine Daten) oder ein Datensatz in Sensorlage (normiert 0–1),
+    den af_layout() in die Lage des angezeigten Bildes umrechnet."""
+    if not meta or "canon" not in str(meta.get("Make", "")).lower():
+        return None
+    model = str(meta.get("Model", "")).lower()
+    # Bildgröße im AF-Koordinatensystem (wie digiKam / FocusPoints)
+    if model.endswith("eos 5d"):
+        iw, ih = meta.get("CanonImageWidth"), meta.get("CanonImageHeight")
+    else:
+        iw, ih = meta.get("AFImageWidth"), meta.get("AFImageHeight")
+    iw = _nums(iw or meta.get("ExifImageWidth"))
+    ih = _nums(ih or meta.get("ExifImageHeight"))
+    if not iw or not ih or iw[0] <= 0 or ih[0] <= 0:
+        return None
+    iw, ih = iw[0], ih[0]
+    xs, ys = _nums(meta.get("AFAreaXPositions")), _nums(meta.get("AFAreaYPositions"))
+    n = min(len(xs), len(ys))
+    ws = _nums(meta.get("AFAreaWidths")) or _nums(meta.get("AFAreaWidth")) * n
+    hs = _nums(meta.get("AFAreaHeights")) or _nums(meta.get("AFAreaHeight")) * n or ws
+    # Richtung der Y-Achse hängt vom Kameratyp ab („EOS High-end“ 248, „Compact“ 250;
+    # alle EOS R melden 248)
+    ydir = -1 if _nums(meta.get("CameraType"))[:1] in ([248], [250]) else 1
+    focus = _bits(meta.get("AFPointsInFocus"))
+    selected = _bits(meta.get("AFPointsSelected")) - focus
+    raw = []
+    for i in range(n):
+        w = ws[i] if i < len(ws) else 0
+        h = hs[i] if i < len(hs) else w
+        if w <= 0 or h <= 0:
+            continue                       # ungenutzter Eintrag (z. B. EOS R mit 1 Feld)
+        state = AF_FOCUS if i in focus else AF_SELECTED if i in selected else AF_INACTIVE
+        raw.append((xs[i] / iw, ys[i] / ih, w / iw, h / ih, state))
+    track = _af_tracking(meta, iw, ih)
+    # Gegenprobe: liegt das aktive AF-Feld nur mit gespiegelter Y-Achse auf dem
+    # verfolgten Motiv, gilt für dieses Modell die andere Richtung
+    if track and track["box"] and raw:
+        act = [r for r in raw if r[4] != AF_INACTIVE]
+        if len(act) == 1:
+            tx, ty = track["box"][0], track["box"][1]
+            ax, ay = 0.5 + act[0][0], act[0][1]
+            d_now = abs(ax - tx) + abs(0.5 + ay * ydir - ty)
+            d_flip = abs(ax - tx) + abs(0.5 - ay * ydir - ty)
+            if d_flip < 0.06 and d_now > 0.12:
+                ydir = -ydir
+    pts = []
+    for x, y, w, h, state in raw:
+        cx, cy = 0.5 + x, 0.5 + y * ydir
+        if -0.1 <= cx <= 1.1 and -0.1 <= cy <= 1.1:
+            pts.append((cx, cy, w, h, state))
+    if not pts and not track:
+        return None
+    crop = None
+    c = [(_nums(meta.get(k)) or [0])[0] for k in
+         ("CroppedImageLeft", "CroppedImageTop", "CroppedImageWidth", "CroppedImageHeight")]
+    if c[2] > 0 and c[3] > 0 and (c[2], c[3]) != (iw, ih) \
+            and c[0] + c[2] <= iw * 1.02 and c[1] + c[3] <= ih * 1.02:
+        crop = (c[0] / iw, c[1] / ih, c[2] / iw, c[3] / ih)
+    return {"mode": str(meta.get("AFAreaMode", "") or ""), "points": pts, "track": track,
+            "orient": (_nums(meta.get("Orientation")) or [1])[0], "crop": crop,
+            "aspect": iw / ih}
+
+
+def af_layout(info, shown_aspect=None):
+    """Rechnet af_points() in die Lage des angezeigten Bildes um (Drehung, und
+    Beschnitt, wenn das Bild das Seitenverhältnis des Beschnitts hat).
+    Rückgabe (punkte [(cx, cy, w, h, zustand)], verfolgung {"box", "pt", "label"} | None)."""
+    orient = info.get("orient", 1)
+    crop = info.get("crop")
+    if crop and shown_aspect:
+        a = shown_aspect if orient not in (5, 6, 7, 8) else 1 / shown_aspect
+        ca = crop[2] / crop[3] * info.get("aspect", 1.5)
+        if abs(a - ca) + 0.01 >= abs(a - info.get("aspect", 1.5)):
+            crop = None                    # Bild zeigt den ganzen Sensor
+    else:
+        crop = None
+
+    def tf(cx, cy, w, h):
+        if crop:
+            cx, cy = (cx - crop[0]) / crop[2], (cy - crop[1]) / crop[3]
+            w, h = w / crop[2], h / crop[3]
+        return _orient_box(cx, cy, w, h, orient)
+
+    pts = [(*tf(*p[:4]), p[4]) for p in info.get("points", [])]
+    track = info.get("track")
+    if track:
+        track = dict(track)
+        if track.get("box"):
+            track["box"] = tf(*track["box"])
+        if track.get("pt"):
+            track["pt"] = tf(*track["pt"], 0, 0)[:2]
+    return pts, track
 
 
 # --------------------------------------------------------------------------

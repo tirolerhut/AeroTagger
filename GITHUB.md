@@ -9,20 +9,37 @@ Doppelklick auf `publish_github.bat` im Projektordner. Die Datei führt durch al
 2. **Anmeldung** – beim ersten Mal öffnet sich der Browser. Den im Fenster
    angezeigten Code eingeben und „GitHub CLI“ zulassen. Ein GitHub-Konto
    brauchst du vorher (kostenlos auf [github.com](https://github.com/signup)).
-3. **Lokales Repository** – Git wird im Projektordner eingerichtet. Als Autor
-   trägt die Datei deinen GitHub-Namen und die anonyme Adresse
-   `…@users.noreply.github.com` ein, damit deine echte E-Mail nicht in der
-   Versionsgeschichte steht.
-4. **Commit** – alle Änderungen werden gesammelt. Du kannst eine kurze
-   Beschreibung eingeben oder mit Enter „AeroTagger 0.2.12“ übernehmen.
-5. **Hochladen** – beim ersten Mal fragt die Datei nach dem Namen
-   (Vorschlag: `AeroTagger`) und der Sichtbarkeit, legt das Repository an und
-   lädt alles hoch. Danach genügt ein erneuter Doppelklick für jede neue Version.
+3. **Ziel-Repository** – ist der Ordner noch mit keinem Repository verbunden,
+   fragt die Datei:
+   - **N – neues Repository**: Name (Vorschlag `AeroTagger`) und Sichtbarkeit
+     wählen (Vorschlag: öffentlich); es wird angelegt.
+   - **B – bestehendes Repository aktualisieren**: für eine neue Version, etwa
+     wenn du ein neues AeroTagger-Paket in einen frischen Ordner entpackt hast.
+     Die Datei zeigt deine Repositorys, holt die bisherige Versionsgeschichte
+     von GitHub und nimmt die Dateien im Ordner als neue Version – geänderte,
+     neue **und gelöschte** Dateien werden erfasst.
 
-Liegt `dist\AeroTagger-<Version>-windows.zip` von `build_windows.bat` bereit,
-bietet die Datei zum Schluss an, ein **Release** daraus zu machen. Es erscheint
-auf GitHub rechts unter „Releases“ als Download – für alle, die nur die fertige
-EXE wollen.
+   Ist der Ordner schon verbunden, geht es ohne Frage weiter. Gibt es auf GitHub
+   Änderungen, die hier fehlen, bietet die Datei an, sie zuerst zu übernehmen.
+4. **Version prüfen** – ist die Version (z. B. `v0.2.16`) auf GitHub schon
+   veröffentlicht, warnt die Datei: Für eine neue Version zuerst `APP_VERSION` in
+   `aerotagger/core.py` erhöhen, sonst bieten die Apps das Update nicht an.
+5. **Commit** – kurze Beschreibung eingeben oder mit Enter „AeroTagger 0.2.16“
+   übernehmen. Als Autor stehen dein GitHub-Name und die anonyme Adresse
+   `…@users.noreply.github.com` drin, nicht deine echte E-Mail.
+6. **Hochladen** – samt Versions-Tag `v0.2.16`.
+
+Zum Schluss bietet die Datei ein **Release** an. Das brauchst du, damit
+AeroTagger über *Hilfe → Nach Updates suchen* die neue Version findet. Liegt
+`dist\AeroTagger-<Version>-windows.zip` noch nicht vor, kann die Datei vorher
+`build_windows.bat` ausführen – nur mit dieser Zip können sich auch
+EXE-Installationen selbst aktualisieren. Als Beschreibung („Was ist neu?“)
+zeigt die App später genau diesen Text an; mit Enter wird die Liste der
+Commits verwendet.
+
+Außerdem trägt die Datei den Namen des Repositorys in
+`aerotagger/resources/github_repo.txt` ein – daher weiß jede AeroTagger-Kopie,
+wo sie nach Updates suchen soll.
 
 ## Was hochgeladen wird – und was nicht
 
@@ -37,25 +54,34 @@ ohnehin außerhalb des Projekts in `%USERPROFILE%\.aerotagger`.
 `.gitattributes` sorgt dafür, dass die `.bat`-Dateien Windows-Zeilenenden und
 die Skripte für macOS/Linux Unix-Zeilenenden behalten, egal wo eingecheckt wird.
 
-## Privat oder öffentlich?
+## Öffentlich oder privat?
 
-AeroTagger hat **keine Lizenz** – alle Rechte liegen bei dir. Das heißt:
+Das AeroTagger-Repository ist **öffentlich**. Damit
 
-- **Privat** (empfohlen): nur du siehst das Repository. Andere lädst du unter
-  *Settings → Collaborators* gezielt ein.
-- **Öffentlich**: jeder kann den Code ansehen und das Repository „forken“,
-  darf ihn aber rechtlich nicht verwenden, verändern oder weitergeben.
+- kann jeder Code und Releases sehen und die Windows-Zip herunterladen,
+- funktioniert *Hilfe → Nach Updates suchen* in jeder AeroTagger-Kopie ohne
+  GitHub-Token.
+
+AeroTagger hat weiterhin **keine Lizenz** – alle Rechte liegen bei dir. Den Code
+ansehen und forken darf jeder (das erlauben die GitHub-Nutzungsbedingungen),
+verwenden, verändern oder weitergeben aber nur mit deiner Zustimmung. Soll
+AeroTagger Open Source werden, genügt eine Datei `LICENSE` (z. B. MIT) im
+Projektordner.
 
 Die Sichtbarkeit lässt sich jederzeit unter *Settings → General → Danger Zone →
-Change visibility* ändern. Soll AeroTagger später Open Source werden, genügt
-eine Datei `LICENSE` (z. B. MIT) im Projektordner.
+Change visibility* ändern. Bei einem privaten Repository braucht die
+Update-Funktion einen Token (siehe `LIESMICH.md`, Abschnitt „Updates“);
+`publish_github.bat` zeigt beim Verbinden an, welche Sichtbarkeit gerade gilt.
 
 ## Neue Version veröffentlichen
 
 1. Versionsnummer in `aerotagger/core.py` (`APP_VERSION`) und in der ersten
-   Zeile von `LIESMICH.md` erhöhen, z. B. auf 0.2.13.
-2. Optional `build_windows.bat` starten, damit die neue Windows-Zip entsteht.
-3. `publish_github.bat` starten, Beschreibung eingeben, beim Release mit J bestätigen.
+   Zeile von `LIESMICH.md` erhöhen, z. B. auf 0.2.17. Bei Paketen von Claude
+   ist das schon erledigt.
+2. Neues Paket entpacken – in den bisherigen Ordner (Dateien ersetzen) oder in
+   einen neuen; im neuen Ordner bei der Frage **B** wählen.
+3. `publish_github.bat` starten, Beschreibung eingeben, Release mit J bestätigen
+   und auf Wunsch die EXE bauen lassen.
 
 ## Auf einem anderen Rechner weiterarbeiten
 

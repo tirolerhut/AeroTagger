@@ -7,7 +7,7 @@ zugeschnitten auf Flugzeugfotografie. Ordner durchsuchen, JPEG- und RAW-Dateien
 ansehen, bewerten und IPTC-/XMP-/EXIF-Metadaten schreiben, ähnlich wie in
 Photo Mechanic.
 
-> Version 0.2.12 – in Entwicklung. Es fehlt noch einiges bis zur Version 1.0.
+> Version 0.2.16 – in Entwicklung. Es fehlt noch einiges bis zur Version 1.0.
 
 ## Funktionen
 
@@ -18,13 +18,22 @@ Photo Mechanic.
 - **Metadaten schreiben** mit Variablen (`{ac:Typ}`, `{airport}`, `{aufnahme:%Y}` …),
   Kürzel-Ersetzung (`=fra=`) und Daten aus CSV
 - **Metadaten-Templates** als JSON exportieren und importieren
+- **Fokuspunkte** von Canon-Kameras in der Vorschau einblenden (Taste F), bei EOS R auch das verfolgte Motiv
 - **Sternebewertung** 0–5 per Tastatur, Filter über dem Filmstreifen wie in Lightroom
+- **Updates** direkt aus GitHub-Releases (Hilfe → Nach Updates suchen)
 - **Umbenennen** nach Vorlage beim Schreiben, XMP-Sidecars für RAW-Dateien
 - Getaggte Fotos werden erkannt und zeigen Registrierung, Operator und Typ unter dem Bild
 
 Die ausführliche Anleitung steht in [LIESMICH.md](LIESMICH.md).
 
-## Starten
+## Herunterladen
+
+Die fertige Windows-Version liegt unter [Releases](../../releases/latest)
+(`AeroTagger-<Version>-windows.zip`): entpacken, `AeroTagger.exe` starten –
+Python ist dafür nicht nötig. Neue Versionen holt sich AeroTagger danach selbst
+über *Hilfe → Nach Updates suchen*.
+
+## Aus dem Quellcode starten
 
 | System | Vorgehen |
 |---|---|
